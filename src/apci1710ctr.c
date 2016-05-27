@@ -238,8 +238,6 @@ static void apci1710_interrupt (struct pci_dev * pdev)
  */
 static int apci1710_softReset (counter_channel_t *pchan)
 {
-  unsigned long irqstate;
-
   if (pchan == NULL) {
     printk("%s: %s: pchan is NULL\n", modulename, __FUNCTION__);
   } else if (pchan->pdev == NULL) {
@@ -247,10 +245,6 @@ static int apci1710_softReset (counter_channel_t *pchan)
   } else {
 
     apci1710_intDisable(pchan->channelIndex);
-
-    apci1710_lock(pchan->pdev, &irqstate);
-    i_APCI1710_Write32BitCounterValue(pchan->pdev, pchan->channelIndex, 0);
-    apci1710_unlock(pchan->pdev, irqstate);
 
     frameCountClear(pchan);
     overflowCountClear(pchan);
