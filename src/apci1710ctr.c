@@ -17,6 +17,7 @@
 #include <linux/cdev.h>   // struct cdev
 #include <linux/poll.h>   // poll_table
 #include <linux/mutex.h>  // struct mutex
+#include <linux/jiffies.h>
 #include <asm/io.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
   #include <asm/system.h>
@@ -46,13 +47,25 @@ static int major = 0;               /* default to dynamic major */
 module_param(major, int, 0);
 MODULE_PARM_DESC(major, "Major device number");
 
-static int hysteresis = 1;
+static int mode = APCI1710CTR_MODE_DEFAULT;
+module_param(mode, int, 0);
+MODULE_PARM_DESC(mode, "Acquisition mode (1=single, 2=double, 4=quadruple)");
+
+static int hysteresis = APCI1710CTR_HYSTERESIS_DEFAULT;
 module_param(hysteresis, int, 0);
 MODULE_PARM_DESC(hysteresis, "Hysteresis mode (1=on, 0=off)");
+
+static int filter = APCI1710CTR_FILTER_DEFAULT;
+module_param(filter, int, 0);
+MODULE_PARM_DESC(filter, "Filter inputs (0=off, 1 to 15 = 100 to 800 ns)");
 
 EXPORT_NO_SYMBOLS;
 
 #define NUM_CTR_CHANNELS  4
+
+/* debug timing */
+#define STAT_HISTO_BINS   20
+#define STAT_CHANNEL      1
 
 #define DEVNAME  "apci1710ctr"
 
@@ -208,12 +221,47 @@ static void interruptCountClear(counter_channel_t *pchan)
   atomic_set(&pchan->interruptCount, 0);
 }
 
+/* debug timing */
+
+typedef struct {
+  int histo[STAT_HISTO_BINS];
+  bool histoEnabled;
+  bool first;
+  unsigned long prev_jiffies;
+  bool ignoreEnabled;
+  long ignoreCount;
+} stat_t;
+
+stat_t stat[NUM_CTR_CHANNELS];
+
+static void statStart(int channel)
+{
+  stat[channel].first = true;
+  stat[channel].histoEnabled = true;
+}
+
+static void statStop(int channel)
+{
+  stat[channel].histoEnabled = false;
+}
+
+static void statReset(int channel)
+{
+  int jj;
+  for (jj = 0; jj < STAT_HISTO_BINS; jj++) {
+    stat[channel].histo[jj] = 0;
+  }
+  stat[channel].ignoreCount = 0;
+}
+
 static void apci1710_interrupt (struct pci_dev * pdev)
 {
   uint8_t   mm;
   uint32_t  im;
   int32_t   latch;
   counter_channel_t *pchan;
+  unsigned long jiffy = jiffies;    /* kernel tick count */
+  int diffy;
 
   if (_pdev) {
     (void) i_APCI1710_TestInterrupt(_pdev, &mm, &im, (uint32_t *)&latch);
@@ -223,6 +271,31 @@ static void apci1710_interrupt (struct pci_dev * pdev)
 
       /* callback already holds spinlock */
       ringbufPushLocked(pchan, latch);
+
+      /* debug */
+      if ((mm == STAT_CHANNEL) && stat[mm].histoEnabled) {
+        if (stat[mm].first) {
+          stat[mm].prev_jiffies = jiffy;
+          stat[mm].first = false;
+        } else {
+          diffy = jiffy - stat[mm].prev_jiffies;
+          if (diffy < 0) {
+            printk("%s: %s: Error: diffy=%d\n", modulename, __FUNCTION__, diffy);
+          } else if (diffy < 8 && stat[mm].ignoreEnabled) {
+            /* IGNORE short trigger interval */
+            ++ stat[mm].ignoreCount;
+          } else {
+            /* fill histogram */
+            if (diffy < STAT_HISTO_BINS-1) {
+              ++ stat[mm].histo[diffy];
+            } else {
+              /* last bin includes all higher values */
+              ++ stat[mm].histo[STAT_HISTO_BINS-1];
+            }
+            stat[mm].prev_jiffies = jiffy;
+          }
+        }
+      }
 
     } else {
       printk("%s: %s: Error: chan=%u\n", modulename, __FUNCTION__, mm);
@@ -338,13 +411,13 @@ static int apci1710_intDisable(int moduleNumber)
 
 static int slac_inc_counter_kernel (void)
 {
-  int err1 = 0, err2 = 0, err8 = 0, err9 = 0;
+  int err1 = 0, err2 = 0, err7 = 0, err8 = 0, err9 = 0;
   unsigned long irqstate;
   bool initFailed = false;
   int moduleNumber;
 
   uint8_t b_CounterRange = APCI1710_32BIT_COUNTER;        // Selection form counter range.
-  uint8_t b_FirstCounterModus = APCI1710_QUADRUPLE_MODE;  // First counter operating mode.
+  uint8_t b_FirstCounterModus;                            // First counter acquisition mode.
   uint8_t b_FirstCounterOption;                           // First counter option.
 
   if (!_pdev) {
@@ -352,6 +425,33 @@ static int slac_inc_counter_kernel (void)
     return 0;
   }
 
+  /* acquisition mode */
+  switch (mode) {
+    case 1:
+      b_FirstCounterModus = APCI1710_SIMPLE_MODE;
+      printk("%s: acquisition mode is SINGLE\n", modulename);
+      break;
+    case 2:
+      b_FirstCounterModus = APCI1710_DOUBLE_MODE;
+      printk("%s: acquisition mode is DOUBLE\n", modulename);
+      break;
+    case 4:
+    default:
+      b_FirstCounterModus = APCI1710_QUADRUPLE_MODE;
+      printk("%s: acquisition mode is QUADRUPLE\n", modulename);
+      break;
+  }
+
+  /* filter mode */
+  if (filter >= APCI1710CTR_FILTER_MIN && filter <= APCI1710CTR_FILTER_MAX) {
+    printk("%s: filter mode %d: filter from %dns", modulename, filter, 100 + (50 * (filter - 1)));
+  } else if (filter == APCI1710CTR_FILTER_OFF) {
+    printk("%s: filter mode DISABLED (%d)\n", modulename, filter);
+  } else {
+    printk("%s: filter mode INVALID (%d)\n", modulename, filter);
+  }
+
+  /* hysteresis mode */
   if (hysteresis) {
     printk("%s: hysteresis mode is ENABLED\n", modulename);
     b_FirstCounterOption = APCI1710_HYSTERESIS_ON;
@@ -376,6 +476,7 @@ static int slac_inc_counter_kernel (void)
     if (!err1) {
       uint32_t dump;
       err2 = i_APCI1710_SetDigitalChlOff(_pdev, moduleNumber);
+      err7 = i_APCI1710_SetInputFilter(_pdev, moduleNumber, APCI1710_40MHZ, filter);
       err8 = i_APCI1710_Write32BitCounterValue(_pdev, moduleNumber, 0);
       /* read back counter in order to update latch value */
       err9 = i_APCI1710_Read32BitCounterValue(_pdev, moduleNumber, &dump);
@@ -385,13 +486,18 @@ static int slac_inc_counter_kernel (void)
     apci1710_unlock(_pdev, irqstate);
 
     if (err1) {
-      printk ("i_APCI1710_InitCounter(%d) failed (%d)\n", moduleNumber, err1);
       initFailed = true;
+      printk ("i_APCI1710_InitCounter(%d) failed (%d)\n", moduleNumber, err1);
     }
 
     if (err2) {
       initFailed = true;
       printk ("i_APCI1710_SetDigitalChlOff failed (%d)\n", err2);
+    }
+
+    if (err7) {
+      initFailed = true;
+      printk ("i_APCI1710_SetInputFilter failed (%d)\n", err7);
     }
 
     if (err8) {
@@ -660,43 +766,50 @@ static const struct file_operations intEnable_proc_fops = {
 
 #endif /* INTENABLE_PROC */
 
-#ifdef SOFTRESET_PROC
-
-static ssize_t softReset_proc_read(struct file *file, char __user *buf, size_t size, loff_t *ppos) {
+static ssize_t statCtrl_proc_read(struct file *file, char __user *buf, size_t size, loff_t *ppos) {
   static const char message[] = "Usage:\n"
-                                "echo 1 > softReset\n"
-                                "do soft reset\n";
+                                "echo 0 > statCtrl\n"
+                                "  stop collecting statistics\n"
+                                "echo 1 > statCtrl\n"
+                                "  start collecting statistics\n"
+                                "echo 2 > statCtrl\n"
+                                "  reset statistics\n"
+                                "echo 3 > statCtrl\n"
+                                "  start ignoring trigger intervals under 8ms\n"
+                                "echo 4 > statCtrl\n"
+                                "  stop ignoring trigger intervals under 8ms\n";
   return simple_read_from_buffer(buf, size, ppos, message, sizeof(message));
 }
 
-static ssize_t softReset_proc_write(struct file *file, const char __user *buf,  size_t count, loff_t *ppos) {
+static ssize_t statCtrl_proc_write(struct file *file, const char __user *buf,  size_t count, loff_t *ppos) {
   unsigned int val;
-  int moduleNumber;
+  ssize_t rv;
 
   if (kstrtouint_from_user(buf, count, 0, &val)) {
     return -EFAULT;
+  } else {
+    rv = count;
   }
-  if (val != 1) {
-    return -EINVAL;
+  switch (val) {
+    case 0: statStop(STAT_CHANNEL);                     break;
+    case 1: statStart(STAT_CHANNEL);                    break;
+    case 2: statReset(STAT_CHANNEL);                    break;
+    case 3: stat[STAT_CHANNEL].ignoreEnabled = true;    break;
+    case 4: stat[STAT_CHANNEL].ignoreEnabled = false;   break;
+    default: rv = -EINVAL;                              break;
   }
-
-  for (moduleNumber = 0; moduleNumber < NUM_CTR_CHANNELS; moduleNumber++) {
-    (void) apci1710_softReset(counter_channel + moduleNumber);
-  }
-
-  return count;
+  return rv;
 }
 
-static const struct file_operations softReset_proc_fops = {
+static const struct file_operations statCtrl_proc_fops = {
   .owner = THIS_MODULE,
-  .read = softReset_proc_read,
-  .write = softReset_proc_write,
+  .read = statCtrl_proc_read,
+  .write = statCtrl_proc_write,
   .llseek = default_llseek,
 };
 
-#endif /* SOFTRESET_PROC */
-
 static int status_proc_show(struct seq_file *m, void *v) {
+  int ii;
   unsigned long irqstate;
   uint8_t status1;
   uint32_t value2;
@@ -730,10 +843,42 @@ static int status_proc_show(struct seq_file *m, void *v) {
       seq_printf(m, "ReadLatchRegisterStatus: 0x%08x (%u) (err=%d)\n", status1, status1, err1);
       seq_printf(m, "ReadLatchRegisterValue:  %d (%u) (err=%d)\n", value2,  value2, err2);
     }
-    seq_printf(m, "Interrupt count: %d\n", interruptCountGet(counter_channel + pchan->channelIndex));
-    seq_printf(m, "Frame count:     %d\n", frameCountGet(counter_channel + pchan->channelIndex));
-    seq_printf(m, "Overflow count:  %d\n", overflowCountGet(counter_channel + pchan->channelIndex));
-    seq_printf(m, "Buffer level:    %u / %u\n", ringbufLevel(counter_channel + pchan->channelIndex), _ringSize - 1);
+    seq_printf(m, "Interrupt count:  %d\n", interruptCountGet(counter_channel + pchan->channelIndex));
+    seq_printf(m, "Frame count:      %d\n", frameCountGet(counter_channel + pchan->channelIndex));
+    seq_printf(m, "Overflow count:   %d\n", overflowCountGet(counter_channel + pchan->channelIndex));
+    seq_printf(m, "Buffer level:     %u / %u\n", ringbufLevel(counter_channel + pchan->channelIndex), _ringSize - 1);
+    seq_printf(m, "Acquisition mode: %d: ", mode);
+    switch (mode) {
+      case 1: seq_printf(m, "Single"); break;
+      case 2: seq_printf(m, "Double"); break;
+      case 4: seq_printf(m, "Quadruple"); break;
+      default: seq_printf(m, "INVALID"); break;
+    }
+    seq_printf(m, "\n");
+    seq_printf(m, "Digital filter:  %2d: ", filter);
+    if (filter >= APCI1710CTR_FILTER_MIN && filter <= APCI1710CTR_FILTER_MAX) {
+      seq_printf(m, "Filter from %dns", 100 + (50 * (filter - 1)));
+    } else if (filter == APCI1710CTR_FILTER_OFF) {
+      seq_printf(m, "Filter not used");
+    } else {
+      seq_printf(m, "INVALID");
+    }
+    seq_printf(m, "\nHysteresis mode:  %s\n", hysteresis ? "ENABLED" : "DISABLED");
+
+    if (pchan->channelIndex == STAT_CHANNEL) {
+      seq_printf(m, "--- trigger interval (ms) ---\n");
+    
+      for (ii = 0; ii < STAT_HISTO_BINS-1; ii++) {
+        seq_printf(m, "  %2d  : %-7d\n", ii, stat[pchan->channelIndex].histo[ii]);
+      }
+      seq_printf(m, "  %2d+ : %-7d\n", ii, stat[pchan->channelIndex].histo[ii]);
+      if (stat[pchan->channelIndex].ignoreEnabled) {
+        seq_printf(m, "ignored : %-7lu (interval less than 8ms)\n", stat[pchan->channelIndex].ignoreCount);
+      } else {
+        seq_printf(m, "ignoreEnabled is not set\n");
+      }
+    }
+
   } else {
     seq_printf(m, "lookupboard_by_index(0) failed\n");
   }
@@ -875,6 +1020,8 @@ static unsigned int counter_dev_poll(struct file *filp, poll_table *wait)
   return mask;
 }
 
+/* FIXME: check return values for errors */
+
 static long counter_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
   counter_channel_t *pchan = filp->private_data;
@@ -891,6 +1038,10 @@ static long counter_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 
     case APCI1710CTR_IOCINTDISABLE:
       apci1710_intDisable(pchan->channelIndex);   /* disable interrupts */
+      break;
+
+    case APCI1710CTR_IOCSETINPUTFILTER:
+      i_APCI1710_SetInputFilter(pchan->pdev, pchan->channelIndex, APCI1710_40MHZ, arg);
       break;
 
     default:
@@ -1031,9 +1182,7 @@ void apci1710ctr_proc_create(void)
 #ifdef INTENABLE_PROC
   proc_create(CTR_PROC_DIRNAME0 "/intEnable", 0, NULL, &intEnable_proc_fops);
 #endif /* INTENABLE_PROC */
-#ifdef SOFTRESET_PROC
-  proc_create(CTR_PROC_DIRNAME0 "/softReset", 0, NULL, &softReset_proc_fops);
-#endif /* SOFTRESET_PROC */
+  proc_create(CTR_PROC_DIRNAME1 "/statCtrl", 0, NULL, &statCtrl_proc_fops);
 }
 
 void apci1710ctr_proc_remove(void)
