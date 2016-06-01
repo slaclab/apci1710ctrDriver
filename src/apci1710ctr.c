@@ -1,4 +1,22 @@
-/* apci1710ctr.c */
+/**
+ * ----------------------------------------------------------------------------
+ * File       : apci1710ctr.c
+ * Author     : Chris Ford, caf@slac.stanford.edu
+ * Created    : 2016-03-30
+ * Last update: 2016-06-01
+ * ----------------------------------------------------------------------------
+ * Description:
+ * Kernel module for ADDI-DATA APCIe-1711 incremental counter board.
+ * ----------------------------------------------------------------------------
+ * This file is part of apci1710ctrDriver. It is subject to
+ * the license terms in the LICENSE.txt file found in the top-level directory
+ * of this distribution and at:
+ *   https://confluence.slac.stanford.edu/display/ppareg/LICENSE.html.
+ * No part of apci1710ctrDriver, including this file, may be
+ * copied, modified, propagated, or distributed except according to the terms
+ * contained in the LICENSE.txt file.
+ * ----------------------------------------------------------------------------
+**/
 
 #include <linux/version.h>
 
@@ -1169,20 +1187,20 @@ void apci1710ctr_proc_create(void)
   proc_create(CTR_PROC_DIRNAME2 "/status", 0, NULL, &status_proc_fops_channel2);
   proc_create(CTR_PROC_DIRNAME3 "/status", 0, NULL, &status_proc_fops_channel3);
 
-  proc_create(CTR_PROC_DIRNAME0 "/counter", 0, NULL, &counter_proc_fops_channel0);
-  proc_create(CTR_PROC_DIRNAME1 "/counter", 0, NULL, &counter_proc_fops_channel1);
-  proc_create(CTR_PROC_DIRNAME2 "/counter", 0, NULL, &counter_proc_fops_channel2);
-  proc_create(CTR_PROC_DIRNAME3 "/counter", 0, NULL, &counter_proc_fops_channel3);
+  proc_create(CTR_PROC_DIRNAME0 "/counter", 0666, NULL, &counter_proc_fops_channel0);
+  proc_create(CTR_PROC_DIRNAME1 "/counter", 0666, NULL, &counter_proc_fops_channel1);
+  proc_create(CTR_PROC_DIRNAME2 "/counter", 0666, NULL, &counter_proc_fops_channel2);
+  proc_create(CTR_PROC_DIRNAME3 "/counter", 0666, NULL, &counter_proc_fops_channel3);
 
-  proc_create(CTR_PROC_DIRNAME0 "/digout", 0, NULL, &digout_proc_fops_channel0);
-  proc_create(CTR_PROC_DIRNAME1 "/digout", 0, NULL, &digout_proc_fops_channel1);
-  proc_create(CTR_PROC_DIRNAME2 "/digout", 0, NULL, &digout_proc_fops_channel2);
-  proc_create(CTR_PROC_DIRNAME3 "/digout", 0, NULL, &digout_proc_fops_channel3);
+  proc_create(CTR_PROC_DIRNAME0 "/digout", 0666, NULL, &digout_proc_fops_channel0);
+  proc_create(CTR_PROC_DIRNAME1 "/digout", 0666, NULL, &digout_proc_fops_channel1);
+  proc_create(CTR_PROC_DIRNAME2 "/digout", 0666, NULL, &digout_proc_fops_channel2);
+  proc_create(CTR_PROC_DIRNAME3 "/digout", 0666, NULL, &digout_proc_fops_channel3);
 
 #ifdef INTENABLE_PROC
-  proc_create(CTR_PROC_DIRNAME0 "/intEnable", 0, NULL, &intEnable_proc_fops);
+  proc_create(CTR_PROC_DIRNAME0 "/intEnable", 0666, NULL, &intEnable_proc_fops);
 #endif /* INTENABLE_PROC */
-  proc_create(CTR_PROC_DIRNAME1 "/statCtrl", 0, NULL, &statCtrl_proc_fops);
+  proc_create(CTR_PROC_DIRNAME1 "/statCtrl", 0666, NULL, &statCtrl_proc_fops);
 }
 
 void apci1710ctr_proc_remove(void)
@@ -1198,6 +1216,7 @@ void apci1710ctr_proc_remove(void)
     remove_proc_entry(CTR_PROC_DIRNAME1 "/status", NULL);
     remove_proc_entry(CTR_PROC_DIRNAME1 "/counter", NULL);
     remove_proc_entry(CTR_PROC_DIRNAME1 "/digout", NULL);
+    remove_proc_entry(CTR_PROC_DIRNAME1 "/statCtrl", NULL);
     proc_remove(proc_parent[1]);
   }
   if (proc_parent[2]) {
