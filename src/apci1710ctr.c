@@ -3,7 +3,7 @@
  * File       : apci1710ctr.c
  * Author     : Chris Ford, caf@slac.stanford.edu
  * Created    : 2016-03-30
- * Last update: 2016-06-01
+ * Last update: 2017-06-19
  * ----------------------------------------------------------------------------
  * Description:
  * Kernel module for ADDI-DATA APCIe-1711 incremental counter board.
@@ -76,6 +76,10 @@ MODULE_PARM_DESC(hysteresis, "Hysteresis mode (1=on, 0=off)");
 static int filter = APCI1710CTR_FILTER_DEFAULT;
 module_param(filter, int, 0);
 MODULE_PARM_DESC(filter, "Filter inputs (0=off, 1 to 15 = 100 to 800 ns)");
+
+static int verbose = APCI1710CTR_VERBOSE_DEFAULT;
+module_param(verbose, int, 0);
+MODULE_PARM_DESC(filter, "Verbose (1=on, 0=off)");
 
 EXPORT_NO_SYMBOLS;
 
@@ -375,21 +379,31 @@ static int apci1710_intEnable_all(void)
 static int apci1710_intEnable(int moduleNumber)
 {
   int err6 = 1;
+  int err7 = 0;
   unsigned long irqstate;
 
+  if (verbose) {
+    printk("Entered apci1710_intEnable(%d)\n", moduleNumber);
+  }
   if (_pdev && (moduleNumber >= 0) && (moduleNumber < NUM_CTR_CHANNELS)) {
     apci1710_lock(_pdev, &irqstate);
 
     /* Set the interrupt routine */
     err6 = i_APCI1710_SetBoardIntRoutine (_pdev, apci1710_interrupt);
+    if (verbose) {
+      printk("i_APCI1710_SetBoardIntRoutine() returned %d\n", err6);
+    }
     if (!err6) {
       /* Enable the latch interrupt */
-      (void) i_APCI1710_EnableLatchInterrupt(_pdev, moduleNumber);
+      err7 = i_APCI1710_EnableLatchInterrupt(_pdev, moduleNumber);
+      if (verbose) {
+        printk("i_APCI1710_EnableLatchInterrupt(%d) returned %d\n", moduleNumber, err7);
+      }
     }
 
     apci1710_unlock(_pdev, irqstate);
   }
-  return err6;
+  return err6 + (1000 * err7);
 }
 
 #ifdef INTENABLE_PROC
@@ -462,7 +476,7 @@ static int slac_inc_counter_kernel (void)
 
   /* filter mode */
   if (filter >= APCI1710CTR_FILTER_MIN && filter <= APCI1710CTR_FILTER_MAX) {
-    printk("%s: filter mode %d: filter from %dns", modulename, filter, 100 + (50 * (filter - 1)));
+    printk("%s: filter mode %d: filter from %d ns\n", modulename, filter, 100 + (50 * (filter - 1)));
   } else if (filter == APCI1710CTR_FILTER_OFF) {
     printk("%s: filter mode DISABLED (%d)\n", modulename, filter);
   } else {
@@ -1038,28 +1052,42 @@ static unsigned int counter_dev_poll(struct file *filp, poll_table *wait)
   return mask;
 }
 
-/* FIXME: check return values for errors */
-
 static long counter_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
   counter_channel_t *pchan = filp->private_data;
   long rv = 0;
+  int ii;
 
   switch (cmd) {
     case APCI1710CTR_IOCRESET:
-      apci1710_softReset(pchan);        /* disable interrupts, reset ring buffer, clear stats */
+      ii = apci1710_softReset(pchan);        /* disable interrupts, reset ring buffer, clear stats */
+      if (ii) {
+        rv = -EFAULT;
+      }
       break;
 
     case APCI1710CTR_IOCINTENABLE:
-      apci1710_intEnable(pchan->channelIndex);    /* enable interrupts */
+      ii = apci1710_intEnable(pchan->channelIndex);    /* enable interrupts */
+      if (verbose) {
+        printk("%s: apci1710_intEnable(%u) returned %d\n", modulename, pchan->channelIndex, ii);
+      }
+      if (ii) {
+        rv = -EFAULT;
+      }
       break;
 
     case APCI1710CTR_IOCINTDISABLE:
-      apci1710_intDisable(pchan->channelIndex);   /* disable interrupts */
+      ii = apci1710_intDisable(pchan->channelIndex);   /* disable interrupts */
+      if (ii) {
+        rv = -EFAULT;
+      }
       break;
 
     case APCI1710CTR_IOCSETINPUTFILTER:
-      i_APCI1710_SetInputFilter(pchan->pdev, pchan->channelIndex, APCI1710_40MHZ, arg);
+      ii = i_APCI1710_SetInputFilter(pchan->pdev, pchan->channelIndex, APCI1710_40MHZ, arg);
+      if (ii) {
+        rv = -EFAULT;
+      }
       break;
 
     default:

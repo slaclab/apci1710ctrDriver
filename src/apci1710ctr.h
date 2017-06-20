@@ -19,4 +19,7 @@
 /* input filter 9 = 500ns */
 #define APCI1710CTR_FILTER_DEFAULT  9
 
+/* verbose 1=on, 0=off */
+#define APCI1710CTR_VERBOSE_DEFAULT 0
+
 #endif
