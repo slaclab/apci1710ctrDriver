@@ -30,6 +30,7 @@
 #include <linux/ioctl.h>
 #include <linux/err.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/fs.h>
 #include <linux/pci.h>    // struct pci_dev
 #include <linux/cdev.h>   // struct cdev
@@ -62,24 +63,24 @@ MODULE_AUTHOR("SLAC");
 MODULE_DESCRIPTION("APCI-1710-CTR");
 
 static int major = 0;               /* default to dynamic major */
-module_param(major, int, 0);
+module_param(major, int, 0444);
 MODULE_PARM_DESC(major, "Major device number");
 
 static int mode = APCI1710CTR_MODE_DEFAULT;
-module_param(mode, int, 0);
+module_param(mode, int, 0444);
 MODULE_PARM_DESC(mode, "Acquisition mode (1=single, 2=double, 4=quadruple)");
 
 static int hysteresis = APCI1710CTR_HYSTERESIS_DEFAULT;
-module_param(hysteresis, int, 0);
+module_param(hysteresis, int, 0444);
 MODULE_PARM_DESC(hysteresis, "Hysteresis mode (1=on, 0=off)");
 
 static int filter = APCI1710CTR_FILTER_DEFAULT;
-module_param(filter, int, 0);
+module_param(filter, int, 0444);
 MODULE_PARM_DESC(filter, "Filter inputs (0=off, 1 to 15 = 100 to 800 ns)");
 
 static int verbose = APCI1710CTR_VERBOSE_DEFAULT;
-module_param(verbose, int, 0);
-MODULE_PARM_DESC(filter, "Verbose (1=on, 0=off)");
+module_param(verbose, int, 0644);
+MODULE_PARM_DESC(verbose, "Verbose (1=on, 0=off)");
 
 EXPORT_NO_SYMBOLS;
 
